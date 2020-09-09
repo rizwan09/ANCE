@@ -43,7 +43,7 @@ except ImportError:
     from tensorboardX import SummaryWriter
 
 
-def get_latest_checkpoint(args):
+def get_latest_checkpoint(args, do_predict_only=False):
     if not os.path.exists(args.training_dir):
         return args.init_model_dir, 0
     files = list(next(os.walk(args.training_dir))[2])
@@ -54,6 +54,15 @@ def get_latest_checkpoint(args):
     logger.info("checkpoint files")
     logger.info(files)
     checkpoint_nums = [get_checkpoint_no(s) for s in files if valid_checkpoint(s)]
+
+    if do_predict_only:
+        while (True):
+            pickle_path = args.output_dir+'passage_'+str(max(checkpoint_nums))+'__emb_p__data_obj_0.pb'
+            # print(pickle_path, flush=True)
+            if os.path.exists(pickle_path):
+                break
+            else:
+                checkpoint_nums.remove(max(checkpoint_nums))
 
     if len(checkpoint_nums) > 0:
         return os.path.join(args.training_dir, "checkpoint-" + str(max(checkpoint_nums))), max(checkpoint_nums)
@@ -71,8 +80,15 @@ def load_data(args):
     passage_text = {}
     train_pos_id = []
     train_answers = []
+
     test_answers = []
+
+    test_questions = []
+
     test_answers_trivia = []
+
+    test_questions_trivia = []
+
 
     logger.info("Loading train ann")
     with open(train_ann_path, 'r', encoding='utf8') as f:
@@ -88,6 +104,7 @@ def load_data(args):
         reader = csv.reader(ifile, delimiter='\t')
         for row in reader:
             test_answers.append(eval(row[1]))
+            test_questions.append(str(row[0]))
 
     logger.info("Loading trivia test answers")
     with open(trivia_test_qa_path, "r", encoding="utf-8") as ifile:
@@ -95,6 +112,7 @@ def load_data(args):
         reader = csv.reader(ifile, delimiter='\t')
         for row in reader:
             test_answers_trivia.append(eval(row[1]))
+            test_questions_trivia.append(str(row[0]))
 
     logger.info("Loading passages")
     with open(passage_path, "r", encoding="utf-8") as tsvfile:
@@ -103,10 +121,12 @@ def load_data(args):
         for row in reader:
             if row[0] != 'id':
                 passage_text[pid2offset[int(row[0])]] = (row[1], row[2])
+                if args.do_debug and len(passage_text)>10: break
+
 
     logger.info("Finished loading data, pos_id length %d, train answers length %d, test answers length %d", len(train_pos_id), len(train_answers), len(test_answers))
 
-    return (passage_text, train_pos_id, train_answers, test_answers, test_answers_trivia)
+    return (passage_text, train_pos_id, train_answers, test_answers, test_answers_trivia, test_questions, test_questions_trivia)
 
 
 def load_model(args, checkpoint_path):
@@ -182,6 +202,7 @@ def InferenceEmbeddingFromStreamDataLoader(args, model, train_dataloader, is_que
 def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference = True, load_cache=False):
     inference_batch_size = args.per_gpu_eval_batch_size #* max(1, args.n_gpu)
     #inference_dataloader = StreamingDataLoader(f, fn, batch_size=inference_batch_size, num_workers=1)
+
     inference_dataset = StreamingDataset(f, fn)
     inference_dataloader = DataLoader(inference_dataset, batch_size=inference_batch_size)
 
@@ -195,43 +216,63 @@ def StreamInferenceDoc(args, model, fn, prefix, f, is_query_inference = True, lo
         _embedding, _embedding2id = InferenceEmbeddingFromStreamDataLoader(args, model, inference_dataloader, is_query_inference = is_query_inference, prefix = prefix)
 
     # preserve to memory
-    full_embedding = barrier_array_merge(args, _embedding, prefix = prefix + "_emb_p_", load_cache = load_cache, only_load_in_master = True) 
+    full_embedding = barrier_array_merge(args, _embedding, prefix = prefix + "_emb_p_", load_cache = load_cache, only_load_in_master = True)
     full_embedding2id = barrier_array_merge(args, _embedding2id, prefix = prefix + "_embid_p_", load_cache = load_cache, only_load_in_master = True)
 
     return full_embedding, full_embedding2id
 
 
-def generate_new_ann(args, output_num, checkpoint_path, preloaded_data, latest_step_num):
+def generate_new_ann(args, output_num, checkpoint_path, preloaded_data, latest_step_num, passage_latest_step_num=None):
 
     model = load_model(args, checkpoint_path)
     pid2offset, offset2pid = load_mapping(args.data_dir, "pid2offset")
 
+    if passage_latest_step_num: latest_step_num = passage_latest_step_num
+
     logger.info("***** inference of train query *****")
     train_query_collection_path = os.path.join(args.data_dir, "train-query")
+
     train_query_cache = EmbeddingCache(train_query_collection_path)
     with train_query_cache as emb:
-        query_embedding, query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), "query_" + str(latest_step_num)+"_", emb, is_query_inference = True)
+        if not args.do_predict_only:
+            query_embedding, query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), "query_" + str(latest_step_num)+"_", emb, is_query_inference = True)
+        else:
+            query_embedding, query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), "query_" + str(latest_step_num)+"_", emb, is_query_inference = True, load_cache = True)
 
     logger.info("***** inference of dev query *****")
+
     dev_query_collection_path = os.path.join(args.data_dir, "test-query")
+
     dev_query_cache = EmbeddingCache(dev_query_collection_path)
     with dev_query_cache as emb:
-        dev_query_embedding, dev_query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), "dev_query_"+ str(latest_step_num)+"_", emb, is_query_inference = True)
+        dev_query_embedding, dev_query_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), args.prediction_dataset+"_dev_query_"+ str(latest_step_num)+"_", emb, is_query_inference = True)
 
+    
     dev_query_collection_path_trivia = os.path.join(args.data_dir, "trivia-test-query")
+
     dev_query_cache_trivia = EmbeddingCache(dev_query_collection_path_trivia)
     with dev_query_cache_trivia as emb:
-        dev_query_embedding_trivia, dev_query_embedding2id_trivia = StreamInferenceDoc(args, model, GetProcessingFn(args, query=True), "dev_query_"+ str(latest_step_num)+"_", emb, is_query_inference = True)
+        dev_query_embedding_trivia, dev_query_embedding2id_trivia = StreamInferenceDoc(args, model,
+                                                                                       GetProcessingFn(args,
+                                                                                                       query=True),
+                                                                                       args.prediction_dataset+"_dev_query_" + str(
+                                                                                           latest_step_num) + "_",
+                                                                                       emb, is_query_inference=True)
 
     logger.info("***** inference of passages *****")
     passage_collection_path = os.path.join(args.data_dir, "passages")
     passage_cache = EmbeddingCache(passage_collection_path)
+
     with passage_cache as emb:
-        passage_embedding, passage_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=False), "passage_"+ str(latest_step_num)+"_", emb, is_query_inference = False, load_cache = False)
+        if not args.do_predict_only:
+            passage_embedding, passage_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=False), "passage_"+ str(latest_step_num)+"_", emb, is_query_inference = False)
+        else:
+            passage_embedding, passage_embedding2id = StreamInferenceDoc(args, model, GetProcessingFn(args, query=False), "passage_"+ str(latest_step_num)+"_", emb, is_query_inference = False, load_cache = True)
+
     logger.info("***** Done passage inference *****")
 
     if is_first_worker():
-        passage_text, train_pos_id, train_answers, test_answers, test_answers_trivia = preloaded_data
+        passage_text, train_pos_id, train_answers, test_answers, test_answers_trivia,  test_questions, test_questions_trivia = preloaded_data
         dim = passage_embedding.shape[1]
         print('passage embedding shape: ' + str(passage_embedding.shape))
         top_k = args.topk_training 
@@ -240,13 +281,15 @@ def generate_new_ann(args, output_num, checkpoint_path, preloaded_data, latest_s
         cpu_index.add(passage_embedding)
         logger.info("***** Done ANN Index *****")
 
-        # measure ANN mrr 
+
+
+        # measure ANN mrr
         _, dev_I = cpu_index.search(dev_query_embedding, 100) #I: [number of queries, topk]
-        top_k_hits = validate(passage_text, test_answers, dev_I, dev_query_embedding2id, passage_embedding2id)
+        top_k_hits = validate(passage_text, test_answers, dev_I, dev_query_embedding2id, passage_embedding2id, test_questions, prediction_ouput_file=args.prediction_output_file)
 
                 # measure ANN mrr 
         _, dev_I = cpu_index.search(dev_query_embedding_trivia, 100) #I: [number of queries, topk]
-        top_k_hits_trivia = validate(passage_text, test_answers_trivia, dev_I, dev_query_embedding2id_trivia, passage_embedding2id)
+        top_k_hits_trivia = validate(passage_text, test_answers_trivia, dev_I, dev_query_embedding2id_trivia, passage_embedding2id,  test_questions_trivia, prediction_ouput_file=args.triviaqa_prediction_output_file )
 
         logger.info("Start searching for query embedding with length %d", len(query_embedding))
         _, I = cpu_index.search(query_embedding, top_k) #I: [number of queries, topk]
@@ -276,6 +319,9 @@ def generate_new_ann(args, output_num, checkpoint_path, preloaded_data, latest_s
         with open(ndcg_output_path, 'w') as f:
             json.dump({'top20': top_k_hits[19], 'top100': top_k_hits[99], 'top20_trivia': top_k_hits_trivia[19], 
                 'top100_trivia': top_k_hits_trivia[99], 'checkpoint': checkpoint_path}, f)
+
+        if args.do_predict_only:
+            exit()
 
 
 def GenerateNegativePassaageID(args, passages, answers, query_embedding2id, passage_embedding2id, closest_docs, training_query_positive_id):
@@ -309,23 +355,34 @@ def GenerateNegativePassaageID(args, passages, answers, query_embedding2id, pass
     return query_negative_passage
 
 
-def validate(passages, answers, closest_docs, query_embedding2id, passage_embedding2id):
+def validate(passages, answers, closest_docs, query_embedding2id, passage_embedding2id, questions, prediction_ouput_file=None):
 
     tok_opts = {}
     tokenizer = SimpleTokenizer(**tok_opts)
+
+    prediction = []
 
     logger.info('Matching answers in top docs...')
     scores = []
     for query_idx in range(closest_docs.shape[0]): 
         query_id = query_embedding2id[query_idx]
-        doc_ids = [passage_embedding2id[pidx] for pidx in closest_docs[query_idx]]
+
+        try:
+            doc_ids = [passage_embedding2id[pidx] for pidx in closest_docs[query_idx]]
+        except:
+            import pdb
+            pdb.set_trace()
         hits = []
+        cxts = []
         for i, doc_id in enumerate(doc_ids):
             text = passages[doc_id][0]
             hits.append(has_answer(answers[query_id], text, tokenizer))
+            cxts.append({'id': str(doc_id), 'text': text, 'title': passages[doc_id][1]})
+        prediction.append({'question': questions[query_id], 'answers': answers[query_id], 'ctxs': cxts})
         scores.append(hits)
 
     logger.info('Per question validation results len=%d', len(scores))
+    logger.info('prediction size=%d', len(prediction))
 
     n_docs = len(closest_docs[0])
     top_k_hits = [0] * n_docs
@@ -337,6 +394,12 @@ def validate(passages, answers, closest_docs, query_embedding2id, passage_embedd
     logger.info('Validation results: top k documents hits %s', top_k_hits)
     top_k_hits = [v / len(closest_docs) for v in top_k_hits]
     logger.info('Validation results: top k documents hits accuracy %s', top_k_hits)
+
+
+    if prediction_ouput_file:
+        with open(prediction_ouput_file, 'w') as f:
+            json.dump(prediction, f)
+
     return top_k_hits
     
 
@@ -467,6 +530,8 @@ def get_arguments():
     parser.add_argument("--local_rank", type=int, default=-1, help="For distributed training: local_rank")
     parser.add_argument("--server_ip", type=str, default="", help="For distant debugging.")
     parser.add_argument("--server_port", type=str, default="", help="For distant debugging.")
+    parser.add_argument("--do_predict_only", action="store_true", help="Avoid using CUDA when available")
+    parser.add_argument("--do_debug", action="store_true", help="debug mode or not")
 
     parser.add_argument(
         "--passage_path",
@@ -492,6 +557,28 @@ def get_arguments():
         help="trivia_test_qa_path",
     )
 
+    parser.add_argument(
+        "--prediction_output_file",
+        default=None,
+        type=str,
+        required=False,
+        help="prediction_output_file",
+    )
+
+    parser.add_argument(
+        "--triviaqa_prediction_output_file",
+        default=None,
+        type=str,
+        required=False,
+        help="triviaqa_prediction_output_file",
+    )
+    parser.add_argument(
+        "--prediction_dataset",
+        default='test',
+        type=str,
+        required=False,
+        help="prediction on train/dev/test",
+    )
     args = parser.parse_args()
 
     return args
@@ -544,6 +631,9 @@ def ann_data_gen(args):
         preloaded_data = load_data(args)
 
     while args.end_output_num == -1 or output_num <= args.end_output_num:
+        passage_latest_step_num=None
+        if args.do_predict_only:
+            _, passage_latest_step_num = get_latest_checkpoint(args, args.do_predict_only)
         next_checkpoint, latest_step_num = get_latest_checkpoint(args)
 
         if args.only_keep_latest_embedding_file:
@@ -554,7 +644,7 @@ def ann_data_gen(args):
         else:
             logger.info("start generate ann data number %d", output_num)
             logger.info("next checkpoint at " + next_checkpoint)
-            generate_new_ann(args, output_num, next_checkpoint, preloaded_data, latest_step_num)
+            generate_new_ann(args, output_num, next_checkpoint, preloaded_data, latest_step_num, passage_latest_step_num=passage_latest_step_num)
             logger.info("finished generating ann data number %d", output_num)
             output_num += 1
             last_checkpoint = next_checkpoint
