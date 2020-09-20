@@ -31,9 +31,13 @@ import copy
 from torch import nn
 import pickle
 try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:
     from tensorboardX import SummaryWriter
+    # from torch.utils.tensorboard import SummaryWriter
+except ImportError:
+    # from tensorboardX import SummaryWriter
+    from torch.utils.tensorboard import SummaryWriter
+
+
 import pandas as pd
 logger = logging.getLogger(__name__)
 from utils.util import (
@@ -121,6 +125,7 @@ def train(args, model, tokenizer, query_cache, passage_cache):
 
         nq_dev_nll_loss, nq_correct_ratio = evaluate_dev(args, model, passage_cache)
         dev_nll_loss_trivia, correct_ratio_trivia = evaluate_dev(args, model, passage_cache, "-trivia")
+
         if is_first_worker():
             tb_writer.add_scalar("dev_nll_loss/dev_nll_loss", nq_dev_nll_loss, global_step)
             tb_writer.add_scalar("dev_nll_loss/correct_ratio", nq_correct_ratio, global_step)
@@ -269,12 +274,14 @@ def evaluate_dev(args, model, passage_cache, source=""):
     dev_query_cache = EmbeddingCache(dev_query_collection_path)
 
     logger.info('NLL validation ...')
+
     model.eval()
 
     log_result_step = 100
     batches = 0
     total_loss = 0.0
     total_correct_predictions = 0
+
 
     with dev_query_cache:
         dev_data_path = os.path.join(args.data_dir, "dev-data{}".format(source))
@@ -311,6 +318,7 @@ def triplet_fwd_pass(args, model, batch):
     inputs = {"query_ids": batch[0].long(), "attention_mask_q": batch[1].long(), 
                 "input_ids_a": batch[3].long(), "attention_mask_a": batch[4].long(),
                 "input_ids_b": batch[6].long(), "attention_mask_b": batch[7].long()}
+
     loss = model(**inputs)[0]
 
     if args.n_gpu > 1:
