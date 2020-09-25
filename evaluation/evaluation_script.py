@@ -61,8 +61,22 @@ def validate(pred_file_path, n_docs, dpr_result=False):
 if __name__ == '__main__':
 
 
-    pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/New.Chat.ANCE_test_singleset.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
-    validate(pred_file_path, 100, dpr_result=True)
+    # pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/DPR_REPROD.dpr_reproduction_test.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
+    # pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/'
+    # pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/AFTER_CHAT.ANCE_dev_singleset.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
+    # validate(pred_file_path.strip(), 100, dpr_result=True)
+
+
+    pred_file_path='/checkpoint/sviyer/wiki_psg100/ttttt_test.nq.bbase.output.nopp.title.onlypassages.ctxloss.scottformat.json'
+    pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/ANSE_SINGLESET_RERANKER_TRAINED_ON_ANCE.dev.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
+    pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/FINAL_ANCE_RERANKER.test.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
+    pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/FINAL_ANCE_SINGLESET_DEV..bug_fixed.dev.nq.bert-base-uncased.output.nopp.title.onlypassages.json.converted.json'
+
+
+    # pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/Correct.BUG_FIXED_CLUSTERING..dev.nq.bert-base-uncased.output.nopp.title.onlypassages.json.dprformat.json'
+    # validate(pred_file_path.strip(), 100, dpr_result=True)
+    pred_file_path='/checkpoint/mdrizwanparvez/data/first_round_dpr/NQ/Correct.BUG_FIXED_CLUSTERING..test.nq.bert-base-uncased.output.nopp.title.onlypassages.json.dprformat.json'
+    validate(pred_file_path.strip(), 100, dpr_result=True)
     # #
     # pred_file_path='/private/home/mdrizwanparvez/ANCE/commands/NQ_prediction_ouput_file.json'
     # validate(pred_file_path, 100)
